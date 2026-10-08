@@ -12,8 +12,11 @@ describe("shouldTreatAsNonStreaming", () => {
     expect(shouldTreatAsNonStreaming(true, responseWithContentType("application/json"))).toBe(false);
   });
 
-  it("stays on the streaming path when the provider genuinely streamed", () => {
-    expect(shouldTreatAsNonStreaming(false, responseWithContentType("text/event-stream; charset=utf-8"))).toBe(false);
+  it("reroutes to non-streaming when client never asked for SSE, even if the provider genuinely streamed", () => {
+    // A client that never sets `stream` (Nextcloud's integration_openai, bare Guzzle/curl
+    // callers) can't decode text/event-stream at all — handleNonStreamingResponse already
+    // aggregates genuine SSE into JSON, so this must reroute regardless of content-type.
+    expect(shouldTreatAsNonStreaming(false, responseWithContentType("text/event-stream; charset=utf-8"))).toBe(true);
   });
 
   it("reroutes to non-streaming when client never asked for SSE and the provider returned plain JSON", () => {
