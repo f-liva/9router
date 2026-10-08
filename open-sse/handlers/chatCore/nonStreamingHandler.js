@@ -17,17 +17,14 @@ import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 /**
  * A plain OpenAI-API client that never sets `stream` (e.g. Nextcloud's
  * integration_openai, any bare Guzzle/curl JSON caller) gets `stream=true`
- * from chatCore's default heuristic. Some OpenAI-compatible upstreams ignore
- * that and answer with a single `application/json` body anyway. Wrapping
- * that body in SSE headers breaks every client that only decodes real
- * `text/event-stream` — so when the client never asked for SSE and the
- * provider didn't actually deliver it, route to the non-streaming handler
- * instead, which already parses both shapes correctly.
+ * from chatCore's default heuristic, so the upstream may genuinely answer
+ * with `text/event-stream` even though the client never asked for it and
+ * can't decode SSE at all. Whatever shape the provider actually used —
+ * flat JSON or genuine SSE — route to the non-streaming handler, which
+ * already parses both correctly (parseSSEToOpenAIResponse for SSE).
  */
-export function shouldTreatAsNonStreaming(clientRequestedStreaming, providerResponse) {
-  if (clientRequestedStreaming) return false;
-  const contentType = (providerResponse.headers.get("content-type") || "").toLowerCase();
-  return !contentType.includes("text/event-stream");
+export function shouldTreatAsNonStreaming(clientRequestedStreaming) {
+  return !clientRequestedStreaming;
 }
 
 /**
