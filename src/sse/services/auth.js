@@ -4,6 +4,7 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache } from "./antigravityQuota.js";
+import { pickByCacheAffinity } from "./cacheAffinity.js";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -32,6 +33,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     : (excludeConnectionIds ? new Set([excludeConnectionIds]) : new Set());
   const preferredConnectionId = options?.preferredConnectionId || null;
   const requestedModel = options?.requestedModel || model;
+  const cacheKey = options?.cacheKey || null;
   // Acquire mutex to prevent race conditions
   const currentMutex = selectionMutex;
   let resolveMutex;
@@ -190,8 +192,16 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           consecutiveUseCount: 1
         });
       }
+    } else if (strategy === "cache-affinity" && cacheKey) {
+      // The conversation picks the account (rendezvous hashing on its cache key):
+      // every turn of one conversation lands on the same account, so the
+      // provider-side prompt cache keeps hitting. Excluded (failed) accounts are
+      // already filtered out, so a retry naturally promotes the next-ranked one.
+      connection = pickByCacheAffinity(cacheKey, availableConnections);
+      await updateProviderConnection(connection.id, { lastUsedAt: new Date().toISOString() });
     } else {
-      // Default: fill-first (already sorted by priority in getProviderConnections)
+      // Default: fill-first (already sorted by priority in getProviderConnections).
+      // Also the fallback for cache-affinity when the request carries no key.
       connection = availableConnections[0];
     }
 
