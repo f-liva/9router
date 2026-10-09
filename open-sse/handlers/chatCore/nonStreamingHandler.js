@@ -6,6 +6,7 @@ import { createErrorResult } from "../../utils/error.js";
 import { upstreamResponseHeaders } from "../../utils/upstreamHeaders.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { parseSSEToOpenAIResponse } from "./sseToJsonHandler.js";
+import { parseClaudeSSEToMessage } from "./claudeSSEToMessage.js";
 import { unwrapClineEnvelope } from "../../shared/clineEnvelope.js";
 import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
@@ -21,7 +22,9 @@ import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
  * with `text/event-stream` even though the client never asked for it and
  * can't decode SSE at all. Whatever shape the provider actually used —
  * flat JSON or genuine SSE — route to the non-streaming handler, which
- * already parses both correctly (parseSSEToOpenAIResponse for SSE).
+ * parses both: parseSSEToOpenAIResponse for OpenAI-chunk SSE and
+ * parseClaudeSSEToMessage for Anthropic SSE (the latter was missing until
+ * 09/10/2026, which is why a Claude upstream returned an empty message here).
  */
 export function shouldTreatAsNonStreaming(clientRequestedStreaming) {
   return !clientRequestedStreaming;
@@ -254,10 +257,20 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
 
   if (contentType.includes("text/event-stream")) {
     const sseText = await providerResponse.text();
-    const parsed = parseSSEToOpenAIResponse(sseText, model);
+    // A Claude upstream streams Anthropic events, which carry no
+    // `choices[].delta` for parseSSEToOpenAIResponse to read. Assemble an
+    // Anthropic Message instead and let the normal targetFormat translation
+    // below convert it to the client's format.
+    const parsed = targetFormat === FORMATS.CLAUDE
+      ? parseClaudeSSEToMessage(sseText, model)
+      : parseSSEToOpenAIResponse(sseText, model);
     if (!parsed) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
       return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
+    }
+    if (targetFormat === FORMATS.CLAUDE && parsed.error) {
+      appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, parsed.error.message || "Upstream SSE stream failed");
     }
     responseBody = parsed;
   } else {
